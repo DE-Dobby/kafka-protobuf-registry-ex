@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package com.example.v2forward;
+
+option java_package        = "com.example.proto";
+option java_outer_classname = "UserEventV2ForwardProto";
+// java_multiple_files 미설정(false) → Java 클래스: UserEventV2ForwardProto.UserEvent
+
+// v1 대비 timestamp 필드(4번) 제거 → Forward Compatible
+message UserEvent {
+  string user_id = 1;
+  string action  = 2;
+  string payload = 3;
+}

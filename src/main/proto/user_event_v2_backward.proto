@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package com.example.v2backward;
+
+option java_package        = "com.example.proto";
+option java_outer_classname = "UserEventV2BackwardProto";
+// java_multiple_files 미설정(false) → Java 클래스: UserEventV2BackwardProto.UserEvent
+
+// v1 대비 email 필드(5번) 추가 → Backward Compatible
+message UserEvent {
+  string user_id   = 1;
+  string action    = 2;
+  string payload   = 3;
+  int64  timestamp = 4;
+  string email     = 5;
+}
