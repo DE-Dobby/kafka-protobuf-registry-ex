@@ -1,0 +1,1 @@
+# kafka-protobuf-registry-ex
