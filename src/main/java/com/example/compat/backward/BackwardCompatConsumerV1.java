@@ -1,4 +1,4 @@
-package com.example.compat.forward;
+package com.example.compat.backward;
 
 import com.example.config.AppConfig;
 import com.example.proto.UserEvent;
@@ -19,29 +19,31 @@ import java.util.List;
 import java.util.Properties;
 
 /**
- * Forward Compatibility 테스트 - Consumer
+ * Backward Compatibility 테스트 - Consumer V1 (구 스키마, 재배포 전)
  *
- * 구 스키마(v1, UserEvent)로 수신한다.
- * ForwardCompatProducer가 보낸 v2 데이터를 읽으면 timestamp는 기본값 0으로 채워진다.
+ * v1 스키마(email 없음)로 구독한다.
+ * Producer가 이미 v2(email 추가)로 배포된 상태지만,
+ * Protobuf는 모르는 필드(email)를 무시하므로 정상 수신된다.
  *
- * 실행: mvn compile exec:java -Dexec.mainClass="com.example.compat.forward.ForwardCompatConsumer"
+ * Backward Compat의 핵심: Consumer가 v1 그대로여도 v2 메시지를 처리할 수 있다.
+ * email이 필요 없는 서비스라면 Consumer 업그레이드 없이 계속 운영 가능하다.
+ *
+ * 실행: mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatConsumerV1"
  */
-public class ForwardCompatConsumer {
+public class BackwardCompatConsumerV1 {
 
-    private static final Logger log = LoggerFactory.getLogger(ForwardCompatConsumer.class);
+    private static final Logger log = LoggerFactory.getLogger(BackwardCompatConsumerV1.class);
 
     private static final String TOPIC            = AppConfig.get("kafka.topic");
     private static final String BOOTSTRAP_SERVER = AppConfig.get("kafka.bootstrap.servers");
     private static final String SCHEMA_REGISTRY  = AppConfig.get("schema.registry.url");
-    private static final String GROUP_ID         = AppConfig.get("kafka.consumer.group-id.forward");
+    private static final String GROUP_ID         = AppConfig.get("kafka.consumer.group-id.backward.v1");
 
     public static void main(String[] args) {
-        log.info("=== Forward Compat Consumer 시작 (v1 스키마) ===");
-        log.info("topic: {}, group: {}", TOPIC, GROUP_ID);
-        log.info("v2 데이터 수신 시 timestamp 필드는 기본값 0 으로 채워짐");
+        log.info("=== Backward Consumer V1 시작 (구 스키마, email 모름) ===");
+        log.info("v2 메시지의 email 필드는 무시되고 나머지 필드는 정상 수신된다.");
 
         try (KafkaConsumer<String, UserEvent> consumer = new KafkaConsumer<>(buildProps())) {
-            // 파티션이 할당되는 시점에 바로 끝으로 이동 — poll() 이전에 seek가 적용됨
             consumer.subscribe(List.of(TOPIC), new ConsumerRebalanceListener() {
                 @Override
                 public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
@@ -54,12 +56,11 @@ public class ForwardCompatConsumer {
 
             while (true) {
                 ConsumerRecords<String, UserEvent> records = consumer.poll(Duration.ofMillis(1000));
-
                 records.forEach(record -> {
                     UserEvent event = record.value();
-                    log.info("수신 → userId={} action={} payload={} timestamp={}",
-                            event.getUserId(), event.getAction(), event.getPayload(),
-                            event.getTimestamp());
+                    // email 필드는 v1 스키마에 없으므로 수신 불가 → 무시됨
+                    log.info("[v1 consumer] 수신 → userId={} action={} timestamp={} (email 필드 없음)",
+                            event.getUserId(), event.getAction(), event.getTimestamp());
                 });
             }
         }
@@ -73,9 +74,7 @@ public class ForwardCompatConsumer {
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaProtobufDeserializer.class.getName());
         props.put("schema.registry.url", SCHEMA_REGISTRY);
-        // v1 Java 클래스로 역직렬화
-        props.put(KafkaProtobufDeserializerConfig.SPECIFIC_PROTOBUF_VALUE_TYPE,
-                UserEvent.class.getName());
+        props.put(KafkaProtobufDeserializerConfig.SPECIFIC_PROTOBUF_VALUE_TYPE, UserEvent.class.getName());
         return props;
     }
 }

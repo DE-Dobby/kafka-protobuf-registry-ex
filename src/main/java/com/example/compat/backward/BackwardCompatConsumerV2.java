@@ -24,39 +24,31 @@ import java.util.Map;
 import java.util.Properties;
 
 /**
- * Backward Compatibility 테스트 - Consumer
+ * Backward Compatibility 테스트 - Consumer V2 (신 스키마, 재배포 후)
  *
- * 시작 시 v2 스키마(email 추가)를 Schema Registry에 등록한 뒤 구독을 시작한다.
- * 실제 배포 시나리오에서 새 Consumer가 먼저 배포되어 v2 스키마를 등록하는 흐름과 동일하다.
+ * v2 스키마(email 추가)로 구독한다.
+ * email이 필요한 서비스가 선택적으로 v2로 업그레이드한 상황을 시뮬레이션한다.
  *
- * BackwardCompatProducer가 v1으로 보낸 메시지를 v2로 수신하면 email은 기본값 "" 로 채워진다.
+ * BackwardCompatConsumerV1과 동시에 실행하면 롤링 재배포를 확인할 수 있다.
  *
- * 실행 순서:
- *   터미널 1: mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatConsumer"
- *   터미널 2: mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatProducer"
+ * 실행: mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatConsumerV2"
  */
-public class BackwardCompatConsumer {
+public class BackwardCompatConsumerV2 {
 
-    private static final Logger log = LoggerFactory.getLogger(BackwardCompatConsumer.class);
+    private static final Logger log = LoggerFactory.getLogger(BackwardCompatConsumerV2.class);
 
     private static final String TOPIC            = AppConfig.get("kafka.topic");
     private static final String BOOTSTRAP_SERVER = AppConfig.get("kafka.bootstrap.servers");
     private static final String SCHEMA_REGISTRY  = AppConfig.get("schema.registry.url");
     private static final String SUBJECT          = AppConfig.get("schema.subject");
-    private static final String GROUP_ID         = AppConfig.get("kafka.consumer.group-id.backward");
+    private static final String GROUP_ID         = AppConfig.get("kafka.consumer.group-id.backward.v2");
 
     public static void main(String[] args) throws Exception {
-        log.info("=== Backward Compat Consumer 시작 ===");
-        log.info("topic: {}, group: {}", TOPIC, GROUP_ID);
+        log.info("=== Backward Consumer V2 시작 (신 스키마, email 있음) ===");
 
-        // 새 Consumer가 먼저 배포되면서 v2 스키마를 Schema Registry에 등록한다
         registerV2Schema();
 
-        log.info("v1 데이터 수신 시 email 필드는 기본값 '' 으로 채워짐");
-        log.info("BackwardCompatProducer를 실행하세요...");
-
         try (KafkaConsumer<String, UserEventV2BackwardProto.UserEvent> consumer = new KafkaConsumer<>(buildProps())) {
-            // 파티션이 할당되는 시점에 바로 끝으로 이동 — poll() 이전에 seek가 적용됨
             consumer.subscribe(List.of(TOPIC), new ConsumerRebalanceListener() {
                 @Override
                 public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
@@ -70,12 +62,10 @@ public class BackwardCompatConsumer {
             while (true) {
                 ConsumerRecords<String, UserEventV2BackwardProto.UserEvent> records =
                         consumer.poll(Duration.ofMillis(1000));
-
                 records.forEach(record -> {
                     UserEventV2BackwardProto.UserEvent event = record.value();
-                    log.info("수신 → userId={} action={} payload={} timestamp={} email='{}'",
-                            event.getUserId(), event.getAction(), event.getPayload(),
-                            event.getTimestamp(), event.getEmail());
+                    log.info("[v2 consumer] 수신 → userId={} action={} timestamp={} email='{}'",
+                            event.getUserId(), event.getAction(), event.getTimestamp(), event.getEmail());
                 });
             }
         }
@@ -85,12 +75,11 @@ public class BackwardCompatConsumer {
         SchemaRegistryClient registry = new CachedSchemaRegistryClient(
                 SCHEMA_REGISTRY, 100, List.of(new ProtobufSchemaProvider()), Map.of());
         ProtobufSchema v2Schema = new ProtobufSchema(UserEventV2BackwardProto.UserEvent.getDescriptor());
-
         if (registry.testCompatibility(SUBJECT, v2Schema)) {
             int id = registry.register(SUBJECT, v2Schema);
             log.info("[Schema Registry] v2 스키마 등록 완료 → schema_id={}", id);
         } else {
-            log.warn("[Schema Registry] v2 스키마가 호환되지 않음 → 등록 스킵");
+            log.info("[Schema Registry] v2 스키마 이미 등록됨");
         }
     }
 
@@ -102,7 +91,6 @@ public class BackwardCompatConsumer {
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, KafkaProtobufDeserializer.class.getName());
         props.put("schema.registry.url", SCHEMA_REGISTRY);
-        // v2 Java 클래스로 역직렬화
         props.put(KafkaProtobufDeserializerConfig.SPECIFIC_PROTOBUF_VALUE_TYPE,
                 UserEventV2BackwardProto.UserEvent.class.getName());
         return props;

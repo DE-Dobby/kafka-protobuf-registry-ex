@@ -6,11 +6,13 @@ option java_package        = "com.example.proto";
 option java_outer_classname = "UserEventV2BackwardProto";
 // java_multiple_files 미설정(false) → Java 클래스: UserEventV2BackwardProto.UserEvent
 
-// v1 대비 email 필드(5번) 추가 → Backward Compatible
+// v1 대비 변경사항:
+//   - email 필드(5번) 추가       → Backward Compatible
+//   - payload 필드(3번) deprecated → 향후 v3에서 제거 예정, email로 대체
 message UserEvent {
   string user_id   = 1;
   string action    = 2;
-  string payload   = 3;
+  string payload   = 3 [deprecated = true];
   int64  timestamp = 4;
   string email     = 5;
 }

@@ -2,9 +2,8 @@
 
 Confluent Platform 로컬 환경에서 Protobuf 스키마를 Schema Registry에 등록하고
 Kafka Producer/Consumer로 메시지를 주고받는 Maven 샘플 프로젝트입니다.
+추후 플링크 프로젝트를 만들어서 CDC 연계할 예정입니다.
 
-
-TODO : 추후 좀 더 분리해서 Backward/Forward 토픽별로 나눠서 스키마 변경하는거에 대해 다시 정리 예정...
 ---
 
 ## 프로젝트 구조
@@ -25,14 +24,18 @@ kafka-protobuf-registry-ex/
     │   ├── consumer/
     │   │   └── UserEventConsumer.java    # 기본 Consumer
     │   └── compat/
-    │       ├── SchemaEvolutionRunner.java # subject 초기화 + v1 등록
-    │       ├── SchemaResetRunner.java     # subject 버전 삭제
+    │       ├── SchemaEvolutionRunner.java  # subject 초기화 + v1 등록
+    │       ├── SchemaResetRunner.java      # subject 버전 삭제
     │       ├── backward/
-    │       │   ├── BackwardCompatConsumer.java
-    │       │   └── BackwardCompatProducer.java
+    │       │   ├── BackwardCompatProducerV1.java
+    │       │   ├── BackwardCompatProducerV2.java
+    │       │   ├── BackwardCompatConsumerV1.java
+    │       │   └── BackwardCompatConsumerV2.java
     │       └── forward/
-    │           ├── ForwardCompatConsumer.java
-    │           └── ForwardCompatProducer.java
+    │           ├── ForwardCompatProducerV1.java
+    │           ├── ForwardCompatProducerV2.java
+    │           ├── ForwardCompatConsumerV1.java
+    │           └── ForwardCompatConsumerV2.java
     └── resources/
         ├── application.properties
         └── logback.xml
@@ -99,53 +102,94 @@ mvn compile exec:java -Dexec.mainClass="com.example.consumer.UserEventConsumer"
 
 ---
 
-## 4. Schema 호환성 테스트
+## 4. Schema 호환성
 
-### Backward vs Forward
+### Backward Compatibility — 필드를 추가할 때
 
-| | Backward | Forward |
-|---|---|---|
-| **의미** | 새 스키마(v2)로 구 데이터(v1)를 읽을 수 있다 | 구 스키마(v1)로 새 데이터(v2)를 읽을 수 있다 |
-| **배포 순서** | Consumer 먼저 → Producer 나중 | Producer 먼저 → Consumer 나중 |
-| **스키마 변경** | 필드 추가 | 필드 제거 |
-| **쓰는 상황** | 새 필드를 추가했는데 구 Producer가 아직 살아있을 때 | 필드를 제거했는데 구 Consumer가 아직 살아있을 때 |
+새 필드(`email`)를 추가하는 상황.
 
-자세한 내용은 [schema-compatibility.md](./schema-compatibility.md)를 참고하세요.
+```
+1. 초기 운영 상태
+   Producer V1 ──→ [kafka] ──→ Consumer V1
+
+2. Producer V2 재배포 (email 추가, Schema Registry에 v2 자동 등록)
+   Producer V2 ──→ [kafka] ──→ Consumer V1  (email 필드 모름 → Protobuf가 무시, 정상 동작)
+
+3. Consumer V2 배포 (선택적, email이 필요한 서비스만)
+   Producer V2 ──→ [kafka] ──→ Consumer V1  (email 무시, 계속 운영)
+                            ──→ Consumer V2  (email 정상 수신)
+```
+
+Consumer V1은 v2 메시지를 받아도 모르는 필드를 무시하므로 정상 동작한다.
+email이 필요 없는 서비스는 Consumer를 업그레이드하지 않아도 된다.
+
+### Forward Compatibility — 필드를 제거할 때
+
+기존 필드(`timestamp`)를 제거하는 상황. **Consumer를 먼저 v2로 올리고 스키마를 등록한다.**
+
+```
+1. 초기 운영 상태
+   Producer V1 ──→ [kafka] ──→ Consumer V1
+
+2. Consumer V2 먼저 배포 (Schema Registry에 v2 스키마 등록)
+   Producer V1 ──→ [kafka] ──→ Consumer V1  (timestamp 정상 수신)
+                            ──→ Consumer V2  (timestamp 무시, 정상 동작)
+
+3. Producer V2 재배포 (timestamp 제거 메시지 전송)
+   Producer V2 ──→ [kafka] ──→ Consumer V1  (timestamp = 0, 기본값)
+                            ──→ Consumer V2  (timestamp 없음, 정상)
+```
+
+Consumer V2가 먼저 배포되어 스키마 호환성을 확보한 뒤 Producer를 교체하므로
+Consumer를 한 대씩 순차 재배포하는 동안 서비스 중단이 없다.
 
 ---
 
-### 실행 순서
+### 실행
 
-**Step 1 — v1 기준 스키마 등록** (테스트 시작 전 한 번 실행)
-
-```bash
-mvn compile exec:java -Dexec.mainClass="com.example.compat.SchemaEvolutionRunner"
-```
-
-**Step 2a — Backward 테스트** (Consumer가 v2 등록 → Producer는 v1 전송)
-
-```bash
-# 터미널 1: Consumer 먼저 시작 (v2 스키마 등록 후 대기)
-mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatConsumer"
-
-# 터미널 2: Producer 실행
-mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatProducer"
-```
-
-**Step 2b — Forward 테스트** (Producer가 v2 등록+전송 → Consumer는 v1 수신)
-
-```bash
-# 터미널 1: Consumer 먼저 시작
-mvn compile exec:java -Dexec.mainClass="com.example.compat.forward.ForwardCompatConsumer"
-
-# 터미널 2: Producer 실행 (v2 스키마 자동 등록 후 전송)
-mvn compile exec:java -Dexec.mainClass="com.example.compat.forward.ForwardCompatProducer"
-```
-
-**스키마 초기화** (반복 테스트 시 Step 1 전에 실행)
+**사전 준비** (테스트 시작 전 한 번 실행 / 반복 시 SchemaResetRunner 먼저)
 
 ```bash
 mvn compile exec:java -Dexec.mainClass="com.example.compat.SchemaResetRunner"
+mvn compile exec:java -Dexec.mainClass="com.example.compat.SchemaEvolutionRunner"
+```
+
+**Backward 테스트**
+
+```bash
+# 터미널 1: Consumer V1 실행 (초기 운영 상태)
+mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatConsumerV1"
+
+# 터미널 2: Producer V1 실행 (초기 운영 상태)
+mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatProducerV1"
+
+# --- 스키마 변경: Producer V2 재배포 ---
+# 터미널 2: Producer V1 중단 → Producer V2 실행 (v2 스키마 자동 등록)
+mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatProducerV2"
+# Consumer V1은 중단 없이 계속 수신 (email 무시)
+
+# 터미널 3: Consumer V2 배포 (선택적, email이 필요한 경우)
+mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatConsumerV2"
+```
+
+**Forward 테스트**
+
+```bash
+# 터미널 1: Consumer V1 실행 (초기 운영 상태)
+mvn compile exec:java -Dexec.mainClass="com.example.compat.forward.ForwardCompatConsumerV1"
+
+# 터미널 2: Producer V1 실행 (초기 운영 상태)
+mvn compile exec:java -Dexec.mainClass="com.example.compat.forward.ForwardCompatProducerV1"
+
+# --- 스키마 변경: Consumer V2 먼저 배포 (v2 스키마 Schema Registry 등록) ---
+# 터미널 3: Consumer V2 배포 → v2 스키마 자동 등록, ConsumerV1/V2 동시 운영 가능
+mvn compile exec:java -Dexec.mainClass="com.example.compat.forward.ForwardCompatConsumerV2"
+# Producer V1은 중단 없이 계속 전송 (Consumer V1: timestamp 정상, Consumer V2: timestamp 무시)
+
+# --- Producer V2 재배포 (timestamp 제거 메시지 전송) ---
+# 터미널 2: Producer V1 중단 → Producer V2 실행
+mvn compile exec:java -Dexec.mainClass="com.example.compat.forward.ForwardCompatProducerV2"
+# Consumer V1: timestamp=0 (기본값), Consumer V2: 정상 수신
 ```
 
 ---

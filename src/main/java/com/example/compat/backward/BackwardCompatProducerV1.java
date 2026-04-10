@@ -11,29 +11,37 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Backward Compatibility 테스트 - Producer
+ * Backward Compatibility 테스트 - Producer V1 (초기 운영 상태)
  *
- * 구 스키마(v1, UserEvent)로 메시지를 전송한다.
- * BackwardCompatConsumer는 v2(email 추가)로 수신 → email은 기본값 ""
+ * email 필드가 없는 v1 스키마로 메시지를 계속 전송한다.
+ * 스키마 변경 전 초기 운영 상태를 시뮬레이션한다.
  *
- * 실행: mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatProducer"
+ * 실행: mvn compile exec:java -Dexec.mainClass="com.example.compat.backward.BackwardCompatProducerV1"
  */
-public class BackwardCompatProducer {
+public class BackwardCompatProducerV1 {
 
-    private static final Logger log = LoggerFactory.getLogger(BackwardCompatProducer.class);
+    private static final Logger log = LoggerFactory.getLogger(BackwardCompatProducerV1.class);
 
     private static final String TOPIC            = AppConfig.get("kafka.topic");
     private static final String BOOTSTRAP_SERVER = AppConfig.get("kafka.bootstrap.servers");
     private static final String SCHEMA_REGISTRY  = AppConfig.get("schema.registry.url");
 
     public static void main(String[] args) throws InterruptedException {
-        log.info("=== Backward Compat Producer 시작 (v1 스키마) ===");
-        log.info("topic: {}", TOPIC);
+        log.info("=== Backward Producer V1 시작 (초기 운영, email 없음) ===");
+
+        AtomicInteger counter = new AtomicInteger(1);
+
         try (KafkaProducer<String, UserEvent> producer = new KafkaProducer<>(buildProps())) {
-            for (int i = 1; i <= 5; i++) {
-                // v1 스키마: email 필드 없음
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                log.info("종료 중... flush 완료 후 종료");
+                producer.flush();
+            }));
+
+            while (!Thread.currentThread().isInterrupted()) {
+                int i = counter.getAndIncrement();
                 UserEvent event = UserEvent.newBuilder()
                         .setUserId("user-" + i)
                         .setAction("LOGIN")
@@ -42,20 +50,13 @@ public class BackwardCompatProducer {
                         .build();
 
                 producer.send(new ProducerRecord<>(TOPIC, event.getUserId(), event), (meta, ex) -> {
-                    if (ex != null) {
-                        log.error("전송 실패", ex);
-                    } else {
-                        log.info("전송 완료 → partition={} offset={} userId={}",
-                                meta.partition(), meta.offset(), event.getUserId());
-                    }
+                    if (ex != null) log.error("전송 실패", ex);
+                    else log.info("[v1] 전송 → userId={}", event.getUserId());
                 });
 
-                Thread.sleep(500);
+                Thread.sleep(2000);
             }
-            producer.flush();
         }
-
-        log.info("전송 완료. BackwardCompatConsumer로 수신하면 email='' 확인 가능");
     }
 
     private static Properties buildProps() {
