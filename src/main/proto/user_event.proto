@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package com.example;
+
+option java_package = "com.example.proto";
+option java_outer_classname = "UserEventProto";
+option java_multiple_files = true;
+
+message UserEvent {
+  string user_id   = 1;
+  string action    = 2;  // e.g. "LOGIN", "PURCHASE", "LOGOUT"
+  string payload   = 3;
+  int64  timestamp = 4;
+}
